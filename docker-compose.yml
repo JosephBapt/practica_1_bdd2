@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: practica_1_bdd2
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: datawarehouse
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

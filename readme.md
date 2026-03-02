@@ -1,2 +1,5 @@
 # Como usar
-Hagan `npm install` y `npm run start` y yas
+Hagan:
+- `npm install` 
+- `docker compose up -d` 
+- `npm run start`
