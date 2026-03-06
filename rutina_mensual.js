@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const csv = require("csv-parser");
-const { Client } = require("pg"); // Usamos el cliente de PostgreSQL
+const { Client } = require("pg");
 
 const mesesMap = {
   JAN: "01",
@@ -17,17 +17,15 @@ const mesesMap = {
   DEC: "12",
 };
 
-// Configura aquí tus credenciales locales de Postgres
 const dbConfig = {
-  database: "datawarehouse", // asegúrate de crear esta BD en pgAdmin o psql antes de correr el script
-  user: "postgres", // tu usuario (suele ser postgres o joseph)
+  database: "datawarehouse",
+  user: "postgres",
   password: "password",
   host: "localhost",
   port: 5432,
 };
 
 async function inicializarBaseDeDatos(client) {
-  // Creación del esquema de estrella adaptado a la sintaxis de PostgreSQL
   await client.query(`
     CREATE TABLE IF NOT EXISTS dim_time (
       time_key SERIAL PRIMARY KEY,
@@ -59,13 +57,18 @@ async function inicializarBaseDeDatos(client) {
       product_type TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS dim_brand (
+      brand_key SERIAL PRIMARY KEY,
+      brand_name TEXT UNIQUE
+    );
+
     CREATE TABLE IF NOT EXISTS fact_manufacturing (
       fact_id SERIAL PRIMARY KEY,
       factory_key INTEGER REFERENCES dim_factory(factory_key),
       location_key INTEGER REFERENCES dim_location(location_key),
       supplier_key INTEGER REFERENCES dim_supplier(supplier_key),
       time_key INTEGER REFERENCES dim_time(time_key),
-      brands TEXT,
+      brand_key INTEGER REFERENCES dim_brand(brand_key),
       events TEXT,
       total_workers INTEGER,
       line_workers INTEGER,
@@ -77,13 +80,12 @@ async function inicializarBaseDeDatos(client) {
 }
 
 async function procesarArchivoMensual(rutaArchivo) {
-  // 1. Extracción de la fecha
   const contenido = fs.readFileSync(rutaArchivo, "utf-8");
   const matchFecha = contenido.match(/Data As Of\s+([A-Z]{3})\s+(\d{4})/i);
 
   if (!matchFecha) {
     throw new Error(
-      "No se pudo extraer la fecha. Verifica que el archivo sea un CSV de texto plano.",
+      "No se pudo extraer la fecha.",
     );
   }
 
@@ -92,17 +94,15 @@ async function procesarArchivoMensual(rutaArchivo) {
   const fechaReporte = `${anioStr}-${mesesMap[mesStr]}-01`;
 
   console.log(
-    `\n📅 Iniciando carga al Data Warehouse (PostgreSQL) para el periodo: ${fechaReporte}`,
+    `\nCargando el Data Warehouse para el periodo: ${fechaReporte}`,
   );
 
-  // Conectamos a Postgres
   const client = new Client(dbConfig);
   await client.connect();
 
   await inicializarBaseDeDatos(client);
   const registros = [];
 
-  // 3. Insertar la fecha actual en la dimensión de tiempo usando ON CONFLICT
   await client.query(
     `
     INSERT INTO dim_time (fecha_reporte, anio, mes) 
@@ -118,7 +118,6 @@ async function procesarArchivoMensual(rutaArchivo) {
   );
   const timeKey = timeRes.rows[0].time_key;
 
-  // 4. Leer y parsear el CSV
   fs.createReadStream(rutaArchivo)
     .pipe(csv({ skipLines: 1 }))
     .on("data", (row) => {
@@ -126,15 +125,13 @@ async function procesarArchivoMensual(rutaArchivo) {
     })
     .on("end", async () => {
       console.log(
-        `🚀 Se encontraron ${registros.length} registros válidos. Procesando ETL...`,
+        `Se encontraron ${registros.length} registros.`,
       );
 
-      // Iniciamos transacción en Postgres
       await client.query("BEGIN");
 
       try {
         for (const fila of registros) {
-          // --- A. DIMENSIÓN UBICACIÓN ---
           await client.query(
             `
             INSERT INTO dim_location (address, city, state, postal_code, country, region) 
@@ -159,7 +156,6 @@ async function procesarArchivoMensual(rutaArchivo) {
             ? locRes.rows[0].location_key
             : null;
 
-          // --- B. DIMENSIÓN PROVEEDOR ---
           const nombreProveedor = fila["Supplier Group"] || "Desconocido";
           await client.query(
             `
@@ -176,7 +172,6 @@ async function procesarArchivoMensual(rutaArchivo) {
             ? suppRes.rows[0].supplier_key
             : null;
 
-          // --- C. DIMENSIÓN FÁBRICA ---
           await client.query(
             `
             INSERT INTO dim_factory (factory_name, factory_type, product_type) VALUES ($1, $2, $3) ON CONFLICT (factory_name) DO NOTHING
@@ -196,7 +191,20 @@ async function procesarArchivoMensual(rutaArchivo) {
             ? factRes.rows[0].factory_key
             : null;
 
-          // --- D. TABLA DE HECHOS ---
+          const nombreMarca = fila["Nike, Inc. Brand(s)"] || "Sin Marca";
+          await client.query(
+            `
+            INSERT INTO dim_brand (brand_name) VALUES ($1) ON CONFLICT (brand_name) DO NOTHING
+          `,
+            [nombreMarca],
+          );
+
+          const brandRes = await client.query(
+            `SELECT brand_key FROM dim_brand WHERE brand_name = $1`,
+            [nombreMarca],
+          );
+          const brandKey = brandRes.rows[0] ? brandRes.rows[0].brand_key : null;
+
           const totalWorkers = parseInt(fila["Total Workers"]) || 0;
           const lineWorkers = parseInt(fila["Line Workers"]) || 0;
           const pctFemale = parseFloat(fila["% Female Workers"]) || 0;
@@ -205,7 +213,7 @@ async function procesarArchivoMensual(rutaArchivo) {
           await client.query(
             `
             INSERT INTO fact_manufacturing 
-            (factory_key, location_key, supplier_key, time_key, brands, events, total_workers, line_workers, pct_female, pct_migrant) 
+            (factory_key, location_key, supplier_key, time_key, brand_key, events, total_workers, line_workers, pct_female, pct_migrant) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (factory_key, time_key) DO NOTHING
           `,
@@ -214,7 +222,7 @@ async function procesarArchivoMensual(rutaArchivo) {
               locationKey,
               supplierKey,
               timeKey,
-              fila["Nike, Inc. Brand(s)"],
+              brandKey,
               fila["Events"],
               totalWorkers,
               lineWorkers,
@@ -226,20 +234,19 @@ async function procesarArchivoMensual(rutaArchivo) {
 
         await client.query("COMMIT");
         console.log(
-          "✅ ¡ETL completado! Data Warehouse actualizado con éxito en PostgreSQL.",
+          "Data Warehouse actualizado con éxito.",
         );
       } catch (error) {
         await client.query("ROLLBACK");
         console.error(
-          "❌ Error en la transformación/carga. Cambios revertidos:",
+          "Error en la carga",
           error.message,
         );
       } finally {
-        await client.end(); // Cerramos la conexión a la BD
+        await client.end();
       }
     });
 }
 
-// Ejecución
 const nombreArchivo = "./imap_export.csv";
 procesarArchivoMensual(nombreArchivo);
