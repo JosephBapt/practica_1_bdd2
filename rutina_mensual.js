@@ -119,9 +119,9 @@ async function procesarArchivoMensual(rutaArchivo) {
   const timeKey = timeRes.rows[0].time_key;
 
   fs.createReadStream(rutaArchivo)
-    .pipe(csv({ skipLines: 1 }))
+    .pipe(csv({ skipLines: 2, headers: false }))
     .on("data", (row) => {
-      if (row["Factory Name"]) registros.push(row);
+      if (row[0]) registros.push(row);
     })
     .on("end", async () => {
       console.log(
@@ -139,24 +139,24 @@ async function procesarArchivoMensual(rutaArchivo) {
             ON CONFLICT (address, city, country) DO NOTHING
           `,
             [
-              fila["Address"],
-              fila["City"],
-              fila["State"],
-              fila["Postal Code"],
-              fila["Country / Region"],
-              fila["Region"],
+              fila[6], //adress
+              fila[7], //city
+              fila[8], //state
+              fila[9], //postal code
+              fila[10], //country/region
+              fila[11], //region
             ],
           );
 
           const locRes = await client.query(
             `SELECT location_key FROM dim_location WHERE address = $1 AND city = $2 AND country = $3`,
-            [fila["Address"], fila["City"], fila["Country / Region"]],
+            [fila[6], fila[7], fila[10]],
           );
           const locationKey = locRes.rows[0]
             ? locRes.rows[0].location_key
             : null;
 
-          const nombreProveedor = fila["Supplier Group"] || "Desconocido";
+          const nombreProveedor = fila[5] || "Desconocido";
           await client.query(
             `
             INSERT INTO dim_supplier (supplier_group) VALUES ($1) ON CONFLICT (supplier_group) DO NOTHING
@@ -177,21 +177,21 @@ async function procesarArchivoMensual(rutaArchivo) {
             INSERT INTO dim_factory (factory_name, factory_type, product_type) VALUES ($1, $2, $3) ON CONFLICT (factory_name) DO NOTHING
           `,
             [
-              fila["Factory Name"],
-              fila["Factory Type"],
-              fila["Product Type Type"],
+              fila[0], // factory name
+              fila[1], // factory type
+              fila[2], // product type
             ],
           );
 
           const factRes = await client.query(
             `SELECT factory_key FROM dim_factory WHERE factory_name = $1`,
-            [fila["Factory Name"]],
+            [fila[0]],
           );
           const factoryKey = factRes.rows[0]
             ? factRes.rows[0].factory_key
             : null;
 
-          const nombreMarca = fila["Nike, Inc. Brand(s)"] || "Sin Marca";
+          const nombreMarca = fila[3] || "Sin Marca";
           await client.query(
             `
             INSERT INTO dim_brand (brand_name) VALUES ($1) ON CONFLICT (brand_name) DO NOTHING
@@ -203,12 +203,13 @@ async function procesarArchivoMensual(rutaArchivo) {
             `SELECT brand_key FROM dim_brand WHERE brand_name = $1`,
             [nombreMarca],
           );
+          console.log(brandRes.rows[0]);
           const brandKey = brandRes.rows[0] ? brandRes.rows[0].brand_key : null;
 
-          const totalWorkers = parseInt(fila["Total Workers"]) || 0;
-          const lineWorkers = parseInt(fila["Line Workers"]) || 0;
-          const pctFemale = parseFloat(fila["% Female Workers"]) || 0;
-          const pctMigrant = parseFloat(fila["% Migrant Workers"]) || 0;
+          const totalWorkers = parseInt(fila[12]) || 0;
+          const lineWorkers = parseInt(fila[13]) || 0;
+          const pctFemale = parseFloat(fila[14]) || 0;
+          const pctMigrant = parseFloat(fila[15]) || 0;
 
           await client.query(
             `
@@ -223,7 +224,7 @@ async function procesarArchivoMensual(rutaArchivo) {
               supplierKey,
               timeKey,
               brandKey,
-              fila["Events"],
+              fila[4] || "N/A", //events
               totalWorkers,
               lineWorkers,
               pctFemale,
