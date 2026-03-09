@@ -203,7 +203,6 @@ async function procesarArchivoMensual(rutaArchivo) {
             `SELECT brand_key FROM dim_brand WHERE brand_name = $1`,
             [nombreMarca],
           );
-          console.log(brandRes.rows[0]);
           const brandKey = brandRes.rows[0] ? brandRes.rows[0].brand_key : null;
 
           const totalWorkers = parseInt(fila[12]) || 0;
